@@ -62,3 +62,4 @@ app/loops/
 
 # Node modules (if used)
 node_modules/
+.env
