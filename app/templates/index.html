@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audio DAW - MVSep</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/wavesurfer.js@7"></script>
+    <script src="https://unpkg.com/wavesurfer.js@7/dist/plugins/regions.min.js"></script>
+    <style>
+        .gradient-bg {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+        }
+        .glass {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .stem-card {
+            background: linear-gradient(145deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.02) 100%);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .stem-card:hover {
+            border-color: rgba(99, 102, 241, 0.5);
+        }
+        audio {
+            width: 100%;
+            height: 40px;
+        }
+        .spinner {
+            border: 3px solid rgba(255, 255, 255, 0.1);
+            border-top-color: #6366f1;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .stem-icon {
+            width: 48px;
+            height: 48px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 12px;
+            font-size: 24px;
+        }
+    </style>
+</head>
+<body class="gradient-bg min-h-screen font-sans text-white">
+    <div class="container mx-auto px-4 py-8 max-w-6xl">
+        <!-- Header -->
+        <div class="mb-8">
+            <div class="flex items-center justify-between mb-6">
+                <div>
+                    <h1 class="text-4xl font-bold mb-2">🎵 Audio DAW</h1>
+                    <p class="text-gray-400">Edita separaciones de MVSep</p>
+                </div>
+                <button onclick="syncMVSep()" id="syncBtn" class="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 rounded-lg transition font-semibold">
+                    🔄 Sincronizar MVSep
+                </button>
+            </div>
+            <div id="statusMsg" class="text-sm text-gray-400 mb-4"></div>
+        </div>
+
+        <!-- Main layout: Sidebar + Content -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+            <!-- Sidebar: Projects List -->
+            <div class="md:col-span-1">
+                <div class="glass rounded-lg p-4 sticky top-4">
+                    <h2 class="text-xl font-semibold mb-4">📁 Proyectos</h2>
+                    <div id="projectsList" class="space-y-2 max-h-96 overflow-y-auto">
+                        <div class="text-center text-gray-400 py-8">
+                            <p class="text-sm">No hay proyectos</p>
+                            <p class="text-xs mt-2">Sincroniza con MVSep →</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Main Content -->
+            <div class="md:col-span-3 space-y-6">
+                <!-- Project Info -->
+                <div id="projectInfo" class="glass rounded-lg p-6 hidden">
+                    <div class="flex justify-between items-start mb-4">
+                        <div>
+                            <h2 id="projectTitle" class="text-2xl font-bold mb-1">--</h2>
+                            <p id="projectMeta" class="text-gray-400 text-sm">--</p>
+                        </div>
+                        <button onclick="closeProject()" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded transition">
+                            ✕ Cerrar
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Stems -->
+                <div id="stemsContainer" class="space-y-4 hidden">
+                    <h3 class="text-lg font-semibold">🎸 Pistas</h3>
+                    <div id="stemsList" class="space-y-4">
+                        <!-- Stems renderizadas aquí -->
+                    </div>
+                </div>
+
+                <!-- Player Controls -->
+                <div id="playerControls" class="glass rounded-lg p-4 hidden">
+                    <div class="flex items-center gap-4">
+                        <button onclick="togglePlay()" id="playBtn" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 rounded">
+                            ▶ Reproducir
+                        </button>
+                        <input type="range" id="volumeSlider" min="0" max="100" value="100" class="flex-1">
+                        <span id="timeDisplay" class="text-sm font-mono">0:00 / 0:00</span>
+                    </div>
+                </div>
+
+                <!-- Export Section -->
+                <div id="exportSection" class="glass rounded-lg p-4 hidden">
+                    <div class="flex gap-4 items-center">
+                        <select id="exportFormat" class="px-3 py-2 bg-gray-700 rounded">
+                            <option>mp3</option>
+                            <option>wav</option>
+                            <option>flac</option>
+                        </select>
+                        <button onclick="exportMix()" id="exportBtn" class="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 rounded transition">
+                            ⬇️ Descargar Mezcla
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '/api';
+        let currentProject = null;
+        let waveSurfers = {};
+        let silentRegions = {};
+
+        // Sincronizar con MVSep
+        async function syncMVSep() {
+            const btn = document.getElementById('syncBtn');
+            const status = document.getElementById('statusMsg');
+            
+            btn.disabled = true;
+            btn.textContent = '⏳ Sincronizando...';
+            status.textContent = 'Conectando con MVSep...';
+            
+            try {
+                const response = await fetch(`${API_BASE}/sync-mvsep`, {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                
+                if (data.status === 'synced') {
+                    status.textContent = `✅ ${data.new_projects} nuevos proyectos importados`;
+                    await loadProjects();
+                } else {
+                    status.textContent = `❌ Error: ${data.message}`;
+                }
+            } catch (e) {
+                status.textContent = `❌ Error: ${e.message}`;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🔄 Sincronizar MVSep';
+            }
+        }
+
+        // Cargar lista de proyectos
+        async function loadProjects() {
+            try {
+                const response = await fetch(`${API_BASE}/projects`);
+                const projects = await response.json();
+                
+                const list = document.getElementById('projectsList');
+                list.innerHTML = '';
+                
+                if (projects.length === 0) {
+                    list.innerHTML = '<div class="text-center text-gray-400 py-8"><p class="text-sm">No hay proyectos</p></div>';
+                    return;
+                }
+                
+                projects.forEach(p => {
+                    const btn = document.createElement('button');
+                    btn.className = 'w-full text-left px-3 py-2 rounded hover:bg-indigo-600/30 transition truncate';
+                    btn.textContent = `📁 ${p.title}`;
+                    btn.onclick = () => loadProject(p.id);
+                    list.appendChild(btn);
+                });
+            } catch (e) {
+                console.error('Error loading projects:', e);
+            }
+        }
+
+        // Cargar proyecto específico
+        async function loadProject(projectId) {
+            try {
+                const response = await fetch(`${API_BASE}/projects/${projectId}`);
+                const project = await response.json();
+                currentProject = project;
+                silentRegions = {};
+                
+                // Mostrar info
+                document.getElementById('projectInfo').classList.remove('hidden');
+                document.getElementById('projectTitle').textContent = project.title;
+                document.getElementById('projectMeta').textContent = `${project.stem_count} pistas • Proyecto ${project.id}`;
+                
+                // Renderizar pistas
+                renderStems(project.stems);
+                
+                // Mostrar controles
+                document.getElementById('stemsContainer').classList.remove('hidden');
+                document.getElementById('playerControls').classList.remove('hidden');
+                document.getElementById('exportSection').classList.remove('hidden');
+            } catch (e) {
+                alert('Error cargando proyecto: ' + e.message);
+            }
+        }
+
+        // Renderizar pistas con audio
+        function renderStems(stems) {
+            const list = document.getElementById('stemsList');
+            list.innerHTML = '';
+            
+            const colors = {
+                'Vocals': 'bg-red-500',
+                'Drums': 'bg-blue-500',
+                'Bass': 'bg-yellow-500',
+                'Other': 'bg-green-500',
+                'Guitar': 'bg-purple-500',
+                'Piano': 'bg-indigo-500'
+            };
+            
+            stems.forEach((stem, idx) => {
+                const color = colors[stem.name] || 'bg-gray-500';
+                const container = document.createElement('div');
+                container.className = 'stem-card rounded-lg p-4';
+                
+                const icon = document.createElement('div');
+                icon.className = `stem-icon ${color} mb-2`;
+                icon.textContent = '🎵';
+                
+                const name = document.createElement('h4');
+                name.className = 'font-semibold mb-2';
+                name.textContent = stem.name;
+                
+                const audio = document.createElement('audio');
+                audio.controls = true;
+                audio.src = stem.url;
+                audio.className = 'mb-2';
+                
+                const controls = document.createElement('div');
+                controls.className = 'flex gap-2 text-xs';
+                controls.innerHTML = `
+                    <button class="flex-1 px-2 py-1 bg-gray-700 rounded hover:bg-gray-600">M (Silenciar)</button>
+                    <button class="flex-1 px-2 py-1 bg-gray-700 rounded hover:bg-gray-600">Solo</button>
+                    <input type="range" min="0" max="100" value="100" class="flex-1" onchange="changeVolume(${idx}, this.value)">
+                `;
+                
+                container.appendChild(icon);
+                container.appendChild(name);
+                container.appendChild(audio);
+                container.appendChild(controls);
+                list.appendChild(container);
+                
+                waveSurfers[idx] = audio;
+            });
+        }
+
+        // Cambiar volumen
+        function changeVolume(stemIdx, value) {
+            if (waveSurfers[stemIdx]) {
+                waveSurfers[stemIdx].volume = value / 100;
+            }
+        }
+
+        // Reproducir/Pausar
+        function togglePlay() {
+            const btn = document.getElementById('playBtn');
+            const isPlaying = btn.textContent.includes('❚❚');
+            
+            Object.values(waveSurfers).forEach(audio => {
+                if (isPlaying) {
+                    audio.pause();
+                } else {
+                    audio.play();
+                }
+            });
+            
+            btn.textContent = isPlaying ? '▶ Reproducir' : '❚❚ Pausar';
+        }
+
+        // Exportar mezcla
+        async function exportMix() {
+            if (!currentProject) return;
+            
+            const btn = document.getElementById('exportBtn');
+            const format = document.getElementById('exportFormat').value;
+            
+            btn.disabled = true;
+            btn.textContent = '⏳ Exportando...';
+            
+            try {
+                const response = await fetch(
+                    `${API_BASE}/projects/${currentProject.id}/export?format=${format}`,
+                    { method: 'POST' }
+                );
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    window.location.href = data.download_url;
+                } else {
+                    alert('Error: ' + data.message);
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '⬇️ Descargar Mezcla';
+            }
+        }
+
+        // Cerrar proyecto
+        function closeProject() {
+            currentProject = null;
+            silentRegions = {};
+            Object.values(waveSurfers).forEach(audio => audio.pause());
+            waveSurfers = {};
+            
+            document.getElementById('projectInfo').classList.add('hidden');
+            document.getElementById('stemsContainer').classList.add('hidden');
+            document.getElementById('playerControls').classList.add('hidden');
+            document.getElementById('exportSection').classList.add('hidden');
+        }
+
+        // Cargar proyectos al iniciar
+        document.addEventListener('DOMContentLoaded', loadProjects);
+    </script>
+</body>
+</html>
