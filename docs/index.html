@@ -68,7 +68,7 @@
                     <h2 class="text-xl font-semibold mb-4">📁 Proyectos</h2>
                     <div id="projectsList" class="space-y-2 max-h-96 overflow-y-auto">
                         <div class="text-center text-gray-400 py-8">
-                            <p class="text-sm">Cargando...</p>
+                            <p class="text-sm">Click "Sincronizar" para cargar</p>
                         </div>
                     </div>
                 </div>
@@ -116,7 +116,6 @@
     </div>
 
     <script>
-        // CAMBIAR ESTA URL por tu servidor:
         const API_BASE = 'https://vocalremovercloude-production.up.railway.app/api';
         
         let currentProject = null;
@@ -127,7 +126,8 @@
             const status = document.getElementById('statusMsg');
             
             btn.disabled = true;
-            btn.textContent = '⏳...';
+            btn.textContent = '⏳ Sincronizando...';
+            status.textContent = 'Conectando con MVSep...';
             
             try {
                 const response = await fetch(`${API_BASE}/sync-mvsep`, {
@@ -135,9 +135,9 @@
                 });
                 const data = await response.json();
                 status.textContent = `✅ ${data.new_projects || 0} proyectos importados`;
-                loadProjects();
+                await loadProjects();
             } catch (e) {
-                status.textContent = `❌ Error: ${e.message}`;
+                status.textContent = `❌ Error: ${e.message}. Asegúrate que Railway está disponible.`;
             } finally {
                 btn.disabled = false;
                 btn.textContent = '🔄 Sincronizar';
@@ -151,6 +151,7 @@
                 renderProjectsList(projects);
             } catch (e) {
                 console.error('Error:', e);
+                document.getElementById('projectsList').innerHTML = '<div class="text-center text-gray-400 py-8"><p class="text-sm">Error cargando proyectos</p></div>';
             }
         }
 
@@ -254,9 +255,6 @@
             document.getElementById('playerControls').classList.add('hidden');
             document.getElementById('exportSection').classList.add('hidden');
         }
-
-        // Cargar al iniciar
-        loadProjects();
     </script>
 </body>
 </html>
