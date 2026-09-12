@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import aiofiles
 from dotenv import load_dotenv
+import requests
 
 # Load environment
 load_dotenv()
@@ -32,7 +33,6 @@ if not MVSEP_API_TOKEN:
 
 # Import MVSep client
 sys.path.insert(0, str(Path(__file__).parent))
-from mvsep_client import get_separation_history, get_separation_status, format_job_for_db
 from database import (
     init_db, create_track, create_stem, get_all_tracks,
     get_track_with_stems, save_silent_regions, get_silent_regions
@@ -87,6 +87,78 @@ async def startup():
 
 
 # ============================================================
+# MVSEP HELPERS
+# ============================================================
+
+def get_mvsep_history() -> List[str]:
+    """Get list of job hashes from MVSep"""
+    try:
+        print("📡 Obteniendo histórico de MVSep...")
+        response = requests.get(
+            f"{MVSEP_API_URL}/app/separation_history",
+            params={"api_token": MVSEP_API_TOKEN},
+            timeout=30
+        )
+        response.raise_for_status()
+        jobs = response.json()
+        print(f"✅ Histórico obtenido: {len(jobs)} trabajos encontrados")
+        return jobs
+    except Exception as e:
+        print(f"❌ Error obteniendo histórico MVSep: {e}")
+        return []
+
+
+def get_mvsep_job_details(job_hash: str) -> Dict:
+    """Get full details of a specific job"""
+    try:
+        print(f"  📡 Obteniendo detalles de {job_hash[:30]}...")
+        response = requests.get(
+            f"{MVSEP_API_URL}/separation/get",
+            params={"hash": job_hash},
+            timeout=15
+        )
+        response.raise_for_status()
+        result = response.json()
+        
+        if result.get("status") == "done":
+            print(f"  ✅ Job completado")
+            return result
+        else:
+            print(f"  ⏭️  Job no completado: {result.get('status')}")
+            return None
+    except Exception as e:
+        print(f"  ❌ Error: {e}")
+        return None
+
+
+def format_mvsep_job(job_data: Dict) -> Optional[Dict]:
+    """Format MVSep job data for database"""
+    try:
+        # Extract stems from job data
+        stems = []
+        if job_data.get("data") and job_data["data"].get("files"):
+            for file_info in job_data["data"]["files"]:
+                stems.append({
+                    "name": file_info.get("name", "Unknown"),
+                    "url": file_info.get("link", ""),
+                    "size": file_info.get("size", 0)
+                })
+        
+        # Get hash from job data
+        job_hash = job_data.get("hash", "").split("-")[0] if job_data.get("hash") else "unknown"
+        
+        return {
+            "mvsep_hash": job_hash,
+            "title": job_data.get("name", f"Job {job_hash}"),
+            "stems": stems,
+            "stem_count": len(stems)
+        }
+    except Exception as e:
+        print(f"❌ Error formateando job: {e}")
+        return None
+
+
+# ============================================================
 # FRONTEND
 # ============================================================
 
@@ -109,9 +181,10 @@ async def sync_mvsep_history():
     print("🔄 Sincronizando con MVSep...")
     
     try:
-        history_list = get_separation_history()
+        # Get list of job hashes
+        history = get_mvsep_history()
         
-        if not history_list:
+        if not history:
             return {
                 "status": "error",
                 "message": "No se pudo obtener histórico de MVSep",
@@ -121,45 +194,40 @@ async def sync_mvsep_history():
         synced = 0
         errors = 0
         
-        # Si history_list contiene diccionarios completos, usarlos directamente
-        # Si contiene strings (hashes), obtener detalles de cada uno
-        for item in history_list:
+        # Process each job hash
+        for job_hash in history:
             try:
-                # Determinar si es un diccionario o string
-                if isinstance(item, str):
-                    # Es un hash, obtener detalles completos
-                    print(f"  📡 Obteniendo detalles de {item[:30]}...")
-                    job = get_separation_status(item)
-                    if not job or job.get('status') != 'done':
-                        continue
-                else:
-                    # Ya es un diccionario con detalles
-                    job = item
-                    if job.get('status') != 'done':
-                        continue
+                # job_hash is a STRING (hash identifier)
+                print(f"  🔍 Procesando: {job_hash[:30]}...")
                 
-                # Formatear para DB
-                formatted_job = format_job_for_db(job)
-                if not formatted_job or not formatted_job.get('stems'):
+                # Get full details of this job
+                job_details = get_mvsep_job_details(job_hash)
+                if not job_details:
                     continue
                 
-                # Evitar duplicados
+                # Format for database
+                formatted = format_mvsep_job(job_details)
+                if not formatted or not formatted.get("stems"):
+                    print(f"    ⏭️  Sin stems válidos")
+                    continue
+                
+                # Check for duplicates
                 existing_tracks = get_all_tracks()
-                if any(t['name'] == formatted_job['mvsep_hash'] for t in existing_tracks):
-                    print(f"  ⏭️  Saltando (ya existe): {formatted_job['title']}")
+                if any(t['name'] == formatted['mvsep_hash'] for t in existing_tracks):
+                    print(f"    ⏭️  Ya existe: {formatted['title']}")
                     continue
                 
-                # Crear track
+                # Create track in DB
                 track_id = create_track(
-                    name=formatted_job['mvsep_hash'],
+                    name=formatted['mvsep_hash'],
                     bpm=0,
                     duration=0,
-                    stem_count=len(formatted_job['stems']),
-                    original_filename=formatted_job['title']
+                    stem_count=formatted['stem_count'],
+                    original_filename=formatted['title']
                 )
                 
-                # Crear stems con URLs de MVSep
-                for stem in formatted_job['stems']:
+                # Create stems
+                for stem in formatted['stems']:
                     create_stem(
                         track_id=track_id,
                         name=stem['name'],
@@ -170,15 +238,15 @@ async def sync_mvsep_history():
                     )
                 
                 synced += 1
-                print(f"  ✅ Importado: {formatted_job['title']}")
+                print(f"    ✅ Importado: {formatted['title']}")
             
             except Exception as e:
                 errors += 1
-                print(f"  ❌ Error procesando job: {e}")
+                print(f"    ❌ Error: {e}")
         
         return {
             "status": "synced",
-            "total_found": len(history_list),
+            "total_found": len(history),
             "new_projects": synced,
             "errors": errors,
             "message": f"{synced} nuevos proyectos sincronizados desde MVSep"
@@ -191,9 +259,7 @@ async def sync_mvsep_history():
 
 @app.get("/api/projects")
 async def get_projects():
-    """
-    GET lista de proyectos
-    """
+    """GET lista de proyectos"""
     try:
         projects = get_all_tracks()
         
@@ -216,9 +282,7 @@ async def get_projects():
 
 @app.get("/api/projects/{project_id}")
 async def get_project(project_id: int):
-    """
-    GET proyecto específico con stems URLs
-    """
+    """GET proyecto específico con stems URLs"""
     try:
         project = get_track_with_stems(project_id)
         
@@ -250,19 +314,13 @@ async def get_project(project_id: int):
 
 @app.post("/api/projects/{project_id}/silent-regions")
 async def save_silent_regions_endpoint(project_id: int, silent_regions: Dict):
-    """
-    POST guardar silencios
-    Formato: {0: [[0, 1000], [5000, 6000]], 1: [], ...}
-    """
+    """POST guardar silencios"""
     try:
-        # Verificar que existe
         project = get_track_with_stems(project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
         
-        # Guardar
         save_silent_regions(project_id, silent_regions)
-        
         return {"status": "saved", "message": "Silent regions saved"}
     
     except HTTPException:
@@ -274,13 +332,10 @@ async def save_silent_regions_endpoint(project_id: int, silent_regions: Dict):
 
 @app.post("/api/projects/{project_id}/export")
 async def export_mix(project_id: int, format: str = "mp3"):
-    """
-    POST exportar mezcla con silencios aplicados
-    """
+    """POST exportar mezcla"""
     try:
         print(f"🎵 Exportando mezcla del proyecto {project_id}...")
         
-        # Obtener datos
         project = get_track_with_stems(project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -289,12 +344,9 @@ async def export_mix(project_id: int, format: str = "mp3"):
         if not stems:
             raise HTTPException(status_code=400, detail="No stems available")
         
-        # Crear directorio temporal
         temp_dir = Path(tempfile.mkdtemp())
         print(f"📁 Directorio temporal: {temp_dir}")
         
-        # Descargar stems
-        import requests
         stem_files = {}
         
         for stem in stems:
@@ -315,17 +367,14 @@ async def export_mix(project_id: int, format: str = "mp3"):
         if not stem_files:
             raise HTTPException(status_code=400, detail="No stems downloaded")
         
-        # Output file
         output_file = OUTPUT_DIR / f"{project['name']}_mix.{format}"
         output_file.parent.mkdir(exist_ok=True)
         
-        # FFmpeg - Simple mix sin silencios (por ahora)
         ffmpeg_cmd = ['ffmpeg', '-y']
         
         for stem_path in stem_files.values():
             ffmpeg_cmd.extend(['-i', stem_path])
         
-        # Filter: amix
         num_stems = len(stem_files)
         filter_complex = f"amix=inputs={num_stems}:duration=longest"
         
@@ -342,7 +391,6 @@ async def export_mix(project_id: int, format: str = "mp3"):
             print(f"❌ FFmpeg error: {result.stderr}")
             raise Exception("FFmpeg export failed")
         
-        # Limpiar temporal
         import shutil
         shutil.rmtree(temp_dir)
         
