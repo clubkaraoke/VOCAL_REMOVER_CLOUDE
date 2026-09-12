@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎵 Audio DAW - MVSep</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/wavesurfer.js@7"></script>
+    <style>
+        .gradient-bg {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+        }
+        .glass {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .stem-card {
+            background: linear-gradient(145deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.02) 100%);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: all 0.3s ease;
+        }
+        .stem-card:hover {
+            border-color: rgba(99, 102, 241, 0.5);
+            transform: translateY(-2px);
+        }
+        audio {
+            width: 100%;
+            height: 40px;
+        }
+        .spinner {
+            border: 3px solid rgba(255, 255, 255, 0.1);
+            border-top-color: #6366f1;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+            transition: all 0.3s ease;
+        }
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(99, 102, 241, 0.3);
+        }
+        .btn-success {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        }
+        .btn-success:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(16, 185, 129, 0.3);
+        }
+        .project-btn {
+            padding: 12px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-align: left;
+            border: 1px solid transparent;
+        }
+        .project-btn:hover {
+            background: rgba(99, 102, 241, 0.2);
+            border-color: rgba(99, 102, 241, 0.5);
+        }
+        .project-btn.active {
+            background: rgba(99, 102, 241, 0.3);
+            border-color: #6366f1;
+        }
+    </style>
+</head>
+<body class="gradient-bg min-h-screen font-sans text-white">
+    <div class="container mx-auto px-4 py-8 max-w-6xl">
+        <!-- Header -->
+        <div class="mb-8">
+            <div class="flex items-center justify-between mb-6">
+                <div>
+                    <h1 class="text-4xl font-bold mb-2">🎵 Audio DAW</h1>
+                    <p class="text-gray-400">Edita y exporta separaciones de MVSep</p>
+                </div>
+                <button onclick="syncMVSep()" id="syncBtn" class="btn-primary text-white px-6 py-2 rounded-lg font-semibold">
+                    🔄 Sincronizar MVSep
+                </button>
+            </div>
+            <div id="statusMsg" class="text-sm text-indigo-400 mb-4 min-h-6"></div>
+        </div>
+
+        <!-- Main Layout -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+            <!-- Sidebar: Projects -->
+            <div class="md:col-span-1">
+                <div class="glass rounded-lg p-4 sticky top-4">
+                    <h2 class="text-xl font-semibold mb-4">📁 Proyectos</h2>
+                    <div id="projectsList" class="space-y-2 max-h-96 overflow-y-auto">
+                        <div class="text-center text-gray-400 py-8">
+                            <p class="text-sm">No hay proyectos</p>
+                            <p class="text-xs mt-2">Sincroniza con MVSep →</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Main Content -->
+            <div class="md:col-span-3 space-y-6">
+                <!-- Project Info -->
+                <div id="projectInfo" class="glass rounded-lg p-6 hidden">
+                    <div class="flex justify-between items-start mb-4">
+                        <div>
+                            <h2 id="projectTitle" class="text-2xl font-bold mb-1">--</h2>
+                            <p id="projectMeta" class="text-gray-400 text-sm">--</p>
+                        </div>
+                        <button onclick="closeProject()" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded transition">
+                            ✕ Cerrar
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Stems Container -->
+                <div id="stemsContainer" class="space-y-4 hidden">
+                    <h3 class="text-lg font-semibold">🎸 Pistas de audio</h3>
+                    <div id="stemsList" class="space-y-4">
+                        <!-- Stems aquí -->
+                    </div>
+                </div>
+
+                <!-- Player Controls -->
+                <div id="playerControls" class="glass rounded-lg p-4 hidden">
+                    <div class="flex items-center gap-4 flex-wrap">
+                        <button onclick="togglePlayAll()" id="playBtn" class="btn-primary text-white px-6 py-2 rounded font-semibold">
+                            ▶ Reproducir
+                        </button>
+                        <div class="flex-1 min-w-48">
+                            <input type="range" id="volumeSlider" min="0" max="100" value="100" class="w-full" onchange="setGlobalVolume(this.value)">
+                            <div class="text-xs text-gray-400 mt-1">Volumen global</div>
+                        </div>
+                        <span id="timeDisplay" class="text-sm font-mono">0:00</span>
+                    </div>
+                </div>
+
+                <!-- Export Section -->
+                <div id="exportSection" class="glass rounded-lg p-4 hidden">
+                    <div class="flex gap-4 items-center flex-wrap">
+                        <select id="exportFormat" class="px-3 py-2 bg-gray-700 rounded text-white">
+                            <option value="mp3">MP3</option>
+                            <option value="wav">WAV</option>
+                            <option value="flac">FLAC</option>
+                        </select>
+                        <button onclick="exportMix()" id="exportBtn" class="btn-success text-white flex-1 min-w-48 px-4 py-2 rounded transition font-semibold">
+                            ⬇️ Descargar Mezcla
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Demo Info -->
+                <div id="demoInfo" class="glass rounded-lg p-4">
+                    <h3 class="font-semibold mb-2">💡 Demo Mode</h3>
+                    <p class="text-sm text-gray-300 mb-3">
+                        Esta es una versión de demostración. Para funcionalidad completa:
+                    </p>
+                    <ol class="text-sm text-gray-400 space-y-1 ml-4">
+                        <li>1. Descarga el código desde GitHub</li>
+                        <li>2. Instala dependencias: <code class="bg-gray-800 px-2 py-1 rounded">pip install -r requirements.txt</code></li>
+                        <li>3. Configura tu token MVSep en <code class="bg-gray-800 px-2 py-1 rounded">.env</code></li>
+                        <li>4. Corre: <code class="bg-gray-800 px-2 py-1 rounded">python -m uvicorn app.main:app --reload</code></li>
+                        <li>5. Abre: <code class="bg-gray-800 px-2 py-1 rounded">http://localhost:8000</code></li>
+                    </ol>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000/api';
+        let currentProject = null;
+        let allAudios = [];
+        let demoProjects = [
+            {
+                id: 1,
+                title: "Ejemplo: Canción Salsa",
+                stem_count: 6,
+                stems: [
+                    { id: 1, name: "Vocals", url: "data:audio/wav;base64,UklGRiYAAABXQVZFZm10IBAAAAABAAEAQB8AAAB9AAACABAAZGF0YQIAAAAAAA==" },
+                    { id: 2, name: "Drums", url: "data:audio/wav;base64,UklGRiYAAABXQVZFZm10IBAAAAABAAEAQB8AAAB9AAACABAAZGF0YQIAAAAAAA==" },
+                    { id: 3, name: "Bass", url: "data:audio/wav;base64,UklGRiYAAABXQVZFZm10IBAAAAABAAEAQB8AAAB9AAACABAAZGF0YQIAAAAAAA==" },
+                    { id: 4, name: "Other", url: "data:audio/wav;base64,UklGRiYAAABXQVZFZm10IBAAAAABAAEAQB8AAAB9AAACABAAZGF0YQIAAAAAAA==" },
+                    { id: 5, name: "Guitar", url: "data:audio/wav;base64,UklGRiYAAABXQVZFZm10IBAAAAABAAEAQB8AAAB9AAACABAAZGF0YQIAAAAAAA==" },
+                    { id: 6, name: "Piano", url: "data:audio/wav;base64,UklGRiYAAABXQVZFZm10IBAAAAABAAEAQB8AAAB9AAACABAAZGF0YQIAAAAAAA==" },
+                ]
+            }
+        ];
+
+        // Sincronizar con MVSep
+        async function syncMVSep() {
+            const btn = document.getElementById('syncBtn');
+            const status = document.getElementById('statusMsg');
+            
+            btn.disabled = true;
+            btn.textContent = '⏳ Sincronizando...';
+            status.textContent = 'Intentando conectar con servidor...';
+            
+            try {
+                const response = await fetch(`${API_BASE}/sync-mvsep`, {
+                    method: 'POST'
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    status.textContent = `✅ ${data.new_projects} nuevos proyectos importados desde MVSep`;
+                    await loadProjects();
+                } else {
+                    throw new Error('Servidor no disponible');
+                }
+            } catch (e) {
+                status.textContent = `ℹ️ Servidor local no activo. Usando datos de demo. Para funcionalidad real, ejecuta: python -m uvicorn app.main:app --reload`;
+                loadDemoProjects();
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🔄 Sincronizar MVSep';
+            }
+        }
+
+        // Cargar proyectos desde servidor
+        async function loadProjects() {
+            try {
+                const response = await fetch(`${API_BASE}/projects`);
+                if (!response.ok) throw new Error('Error cargando proyectos');
+                
+                const projects = await response.json();
+                renderProjectsList(projects);
+            } catch (e) {
+                console.error('Error:', e);
+                loadDemoProjects();
+            }
+        }
+
+        // Cargar proyectos de demo
+        function loadDemoProjects() {
+            renderProjectsList(demoProjects);
+        }
+
+        // Renderizar lista de proyectos
+        function renderProjectsList(projects) {
+            const list = document.getElementById('projectsList');
+            list.innerHTML = '';
+            
+            if (projects.length === 0) {
+                list.innerHTML = '<div class="text-center text-gray-400 py-8"><p class="text-sm">No hay proyectos</p></div>';
+                return;
+            }
+            
+            projects.forEach(p => {
+                const btn = document.createElement('button');
+                btn.className = 'project-btn w-full';
+                btn.textContent = `📁 ${p.title}`;
+                btn.onclick = () => loadProject(p);
+                list.appendChild(btn);
+            });
+        }
+
+        // Cargar proyecto
+        function loadProject(project) {
+            currentProject = project;
+            allAudios = [];
+            
+            // Mostrar info
+            document.getElementById('projectInfo').classList.remove('hidden');
+            document.getElementById('projectTitle').textContent = project.title;
+            document.getElementById('projectMeta').textContent = `${project.stem_count} pistas • Proyecto ${project.id}`;
+            
+            // Renderizar stems
+            renderStems(project.stems);
+            
+            // Mostrar controles
+            document.getElementById('stemsContainer').classList.remove('hidden');
+            document.getElementById('playerControls').classList.remove('hidden');
+            document.getElementById('exportSection').classList.remove('hidden');
+            document.getElementById('demoInfo').classList.add('hidden');
+        }
+
+        // Renderizar pistas
+        function renderStems(stems) {
+            const list = document.getElementById('stemsList');
+            list.innerHTML = '';
+            allAudios = [];
+            
+            const colors = {
+                'Vocals': 'bg-red-500',
+                'Drums': 'bg-blue-500',
+                'Bass': 'bg-yellow-500',
+                'Other': 'bg-green-500',
+                'Guitar': 'bg-purple-500',
+                'Piano': 'bg-indigo-500'
+            };
+            
+            const icons = {
+                'Vocals': '🎤',
+                'Drums': '🥁',
+                'Bass': '🎸',
+                'Other': '🎵',
+                'Guitar': '🎸',
+                'Piano': '🎹'
+            };
+            
+            stems.forEach((stem, idx) => {
+                const color = colors[stem.name] || 'bg-gray-500';
+                const icon = icons[stem.name] || '🎵';
+                
+                const container = document.createElement('div');
+                container.className = 'stem-card rounded-lg p-4';
+                
+                const header = document.createElement('div');
+                header.className = 'flex items-center gap-3 mb-3';
+                header.innerHTML = `
+                    <div class="${color} w-12 h-12 rounded-lg flex items-center justify-center text-xl">${icon}</div>
+                    <div>
+                        <h4 class="font-semibold">${stem.name}</h4>
+                        <p class="text-xs text-gray-400">Pista ${idx + 1}</p>
+                    </div>
+                `;
+                
+                const audio = document.createElement('audio');
+                audio.src = stem.url;
+                audio.className = 'mb-3';
+                audio.addEventListener('play', () => {
+                    allAudios.forEach((a, i) => {
+                        if (i !== idx) a.pause();
+                    });
+                });
+                
+                const controls = document.createElement('div');
+                controls.className = 'flex gap-2 text-sm';
+                controls.innerHTML = `
+                    <input type="range" min="0" max="100" value="100" class="flex-1" 
+                           onchange="setVolume(${idx}, this.value)">
+                    <span class="text-xs text-gray-400 w-10">${100}%</span>
+                `;
+                
+                container.appendChild(header);
+                container.appendChild(audio);
+                container.appendChild(controls);
+                list.appendChild(container);
+                
+                allAudios.push(audio);
+            });
+        }
+
+        // Controles de volumen
+        function setVolume(idx, value) {
+            if (allAudios[idx]) {
+                allAudios[idx].volume = value / 100;
+            }
+        }
+
+        function setGlobalVolume(value) {
+            allAudios.forEach(audio => {
+                audio.volume = value / 100;
+            });
+        }
+
+        // Reproducir/Pausar todo
+        function togglePlayAll() {
+            const btn = document.getElementById('playBtn');
+            const isPlaying = btn.textContent.includes('❚❚');
+            
+            allAudios.forEach(audio => {
+                if (isPlaying) {
+                    audio.pause();
+                } else {
+                    audio.play();
+                }
+            });
+            
+            btn.textContent = isPlaying ? '▶ Reproducir' : '❚❚ Pausar';
+        }
+
+        // Exportar mezcla
+        function exportMix() {
+            const btn = document.getElementById('exportBtn');
+            const format = document.getElementById('exportFormat').value;
+            
+            btn.disabled = true;
+            btn.textContent = '⏳ Preparando descarga...';
+            
+            setTimeout(() => {
+                alert(`✅ En versión completa se descargaría como: ${currentProject.title}_mix.${format}`);
+                btn.disabled = false;
+                btn.textContent = '⬇️ Descargar Mezcla';
+            }, 1500);
+        }
+
+        // Cerrar proyecto
+        function closeProject() {
+            currentProject = null;
+            allAudios.forEach(audio => audio.pause());
+            allAudios = [];
+            
+            document.getElementById('projectInfo').classList.add('hidden');
+            document.getElementById('stemsContainer').classList.add('hidden');
+            document.getElementById('playerControls').classList.add('hidden');
+            document.getElementById('exportSection').classList.add('hidden');
+            document.getElementById('demoInfo').classList.remove('hidden');
+        }
+
+        // Cargar al iniciar
+        document.addEventListener('DOMContentLoaded', () => {
+            loadDemoProjects();
+        });
+    </script>
+</body>
+</html>
