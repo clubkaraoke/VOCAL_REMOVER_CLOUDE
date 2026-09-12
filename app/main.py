@@ -1,33 +1,20 @@
-import os
-import sys
-import subprocess
-import tempfile
-import requests
+import os, sys, subprocess, tempfile, requests
 from pathlib import Path
-from datetime import datetime
-from typing import Optional, List, Dict
-
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.templating import Jinja2Templates
 from fastapi.requests import Request
 from dotenv import load_dotenv
 
-# Load env
 load_dotenv()
-MVSEP_TOKEN = os.getenv("MVSEP_API_TOKEN")
-MVSEP_URL = "https://mvsep.com/api"
+TOKEN = os.getenv("MVSEP_API_TOKEN")
+if not TOKEN:
+    raise ValueError("MVSEP_API_TOKEN required")
 
-if not MVSEP_TOKEN:
-    raise ValueError("MVSEP_API_TOKEN missing")
-
-# Import DB
 sys.path.insert(0, str(Path(__file__).parent))
 from database import init_db, create_track, create_stem, get_all_tracks, get_track_with_stems
 
-# FastAPI setup
 app = FastAPI(title="Audio DAW - MVSep")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
@@ -39,170 +26,115 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 app.mount("/output", StaticFiles(directory=str(BASE_DIR / "output")), name="output")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
-print(f"✅ Audio DAW - MVSep Integration")
-print(f"📡 Token: {MVSEP_TOKEN[:15]}...")
+print("=" * 50)
+print("✅ AUDIO DAW v2 - MVSEP INTEGRATION - NEW VERSION")
+print("=" * 50)
 
 @app.on_event("startup")
 async def startup():
     init_db()
+    print("✅ Database initialized")
 
 @app.get("/")
 async def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
-# ============================================================
-# MVSEP SYNC
-# ============================================================
-
 @app.post("/api/sync-mvsep")
 async def sync_mvsep():
-    """Sync MVSep projects to database"""
-    print("🔄 Starting MVSep sync...")
+    print("\n" + "="*50)
+    print("🔄 STARTING MVSEP SYNC - NEW LOGIC")
+    print("="*50 + "\n")
     
     try:
-        # Step 1: Get job hashes from MVSep
-        print("📡 Fetching MVSep history...")
-        resp = requests.get(
-            f"{MVSEP_URL}/app/separation_history",
-            params={"api_token": MVSEP_TOKEN},
-            timeout=30
-        )
-        resp.raise_for_status()
-        job_hashes = resp.json()
-        print(f"✅ Found {len(job_hashes)} jobs")
-        
-        if not job_hashes:
-            return {"status": "ok", "synced": 0, "message": "No jobs found"}
+        # Get job hashes
+        print("📡 Fetching MVSep job hashes...")
+        r = requests.get("https://mvsep.com/api/app/separation_history",
+                        params={"api_token": TOKEN}, timeout=30)
+        r.raise_for_status()
+        hashes = r.json()
+        print(f"✅ Got {len(hashes)} job hashes: {hashes}")
         
         synced = 0
-        errors = 0
-        
-        # Step 2: Process each job hash
-        for job_hash in job_hashes:
+        for h in hashes:
             try:
-                # Ensure we have a string
-                if not isinstance(job_hash, str):
-                    print(f"  ⏭️  Skipping non-string: {type(job_hash)}")
-                    continue
+                print(f"\n  Processing hash: {h[:20]}...")
                 
-                print(f"  📥 Processing: {job_hash[:25]}...")
+                # Get job details
+                jr = requests.get("https://mvsep.com/api/separation/get",
+                                params={"hash": h}, timeout=15)
+                jr.raise_for_status()
+                jdata = jr.json()
+                print(f"  Status: {jdata.get('status')}")
                 
-                # Step 3: Get full job details
-                job_resp = requests.get(
-                    f"{MVSEP_URL}/separation/get",
-                    params={"hash": job_hash},
-                    timeout=15
-                )
-                job_resp.raise_for_status()
-                job_data = job_resp.json()
-                
-                # Check status
-                if job_data.get("status") != "done":
-                    print(f"    ⏭️  Not done: {job_data.get('status')}")
+                if jdata.get("status") != "done":
+                    print(f"  Skipping (not done)")
                     continue
                 
                 # Extract stems
                 stems = []
-                if job_data.get("data") and isinstance(job_data["data"], dict):
-                    files = job_data["data"].get("files", [])
-                    if isinstance(files, list):
-                        for f in files:
-                            if isinstance(f, dict):
-                                stems.append({
-                                    "name": f.get("name", "Unknown"),
-                                    "url": f.get("link", ""),
-                                    "size": f.get("size", 0)
-                                })
+                d = jdata.get("data", {})
+                if isinstance(d, dict):
+                    for f in d.get("files", []):
+                        if isinstance(f, dict):
+                            stems.append({
+                                "name": f.get("name", "?"),
+                                "url": f.get("link", ""),
+                                "size": f.get("size", 0)
+                            })
                 
+                print(f"  Found {len(stems)} stems")
                 if not stems:
-                    print(f"    ⏭️  No stems")
                     continue
                 
-                # Get title
-                title = job_data.get("name", f"Job {job_hash[:10]}")
+                title = jdata.get("name", f"Job {h[:10]}")
+                print(f"  Title: {title}")
                 
-                # Check for duplicates
-                existing = get_all_tracks()
-                if any(t['name'] == job_hash for t in existing):
-                    print(f"    ⏭️  Already imported: {title}")
+                # Check duplicate
+                if any(t['name'] == h for t in get_all_tracks()):
+                    print(f"  Already imported, skipping")
                     continue
                 
-                # Create track
-                track_id = create_track(
-                    name=job_hash,
-                    bpm=0,
-                    duration=0,
-                    stem_count=len(stems),
-                    original_filename=title
-                )
+                # Import
+                tid = create_track(name=h, bpm=0, duration=0,
+                                  stem_count=len(stems),
+                                  original_filename=title)
                 
-                # Create stems
-                for stem in stems:
-                    create_stem(
-                        track_id=track_id,
-                        name=stem["name"],
-                        filename="",
-                        duration=0,
-                        url=stem["url"],
-                        file_size=stem.get("size", 0)
-                    )
+                for s in stems:
+                    create_stem(track_id=tid, name=s["name"],
+                               filename="", duration=0,
+                               url=s["url"], file_size=s.get("size", 0))
                 
                 synced += 1
-                print(f"    ✅ Imported: {title}")
+                print(f"  ✅ IMPORTED: {title}")
             
             except Exception as e:
-                errors += 1
-                print(f"    ❌ Error: {str(e)[:100]}")
+                print(f"  ❌ ERROR: {str(e)[:80]}")
         
-        return {
-            "status": "synced",
-            "synced": synced,
-            "errors": errors,
-            "message": f"{synced} projects imported"
-        }
+        print(f"\n✅ SYNC COMPLETE: {synced} projects imported\n")
+        return {"status": "ok", "synced": synced}
     
     except Exception as e:
-        print(f"❌ Sync failed: {e}")
+        print(f"❌ SYNC FAILED: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-# ============================================================
-# PROJECTS API
-# ============================================================
 
 @app.get("/api/projects")
 async def get_projects():
-    """List all projects"""
     try:
-        projects = get_all_tracks()
-        return [
-            {
-                "id": p["id"],
-                "title": p["original_filename"] or p["name"],
-                "stem_count": p["stem_count"],
-                "created_at": p["created_at"]
-            }
-            for p in projects
-        ]
+        return [{"id": p["id"], "title": p["original_filename"] or p["name"],
+                "stem_count": p["stem_count"]} for p in get_all_tracks()]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/projects/{project_id}")
-async def get_project(project_id: int):
-    """Get project with stems"""
+@app.get("/api/projects/{pid}")
+async def get_project(pid: int):
     try:
-        project = get_track_with_stems(project_id)
-        if not project:
-            raise HTTPException(status_code=404, detail="Not found")
-        
-        return {
-            "id": project["id"],
-            "title": project["original_filename"] or project["name"],
-            "stem_count": project["stem_count"],
-            "stems": [
-                {"id": s["id"], "name": s["name"], "url": s.get("url", "")}
-                for s in project["stems"]
-            ]
-        }
+        p = get_track_with_stems(pid)
+        if not p:
+            raise HTTPException(status_code=404)
+        return {"id": p["id"], "title": p["original_filename"] or p["name"],
+                "stem_count": p["stem_count"],
+                "stems": [{"id": s["id"], "name": s["name"], "url": s.get("url", "")}
+                         for s in p["stems"]]}
     except HTTPException:
         raise
     except Exception as e:
@@ -210,7 +142,7 @@ async def get_project(project_id: int):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "version": "2.0"}
 
 if __name__ == "__main__":
     import uvicorn
