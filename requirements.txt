@@ -1,18 +1,10 @@
-# FastAPI and server
+# v2.0 - FORCE REBUILD
 fastapi==0.95.2
 uvicorn[standard]>=0.27.0
 python-multipart>=0.0.9
 aiofiles>=23.2.1
 jinja2>=3.1.3
-
-# Basic audio processing
 numpy<2.0.0
-
-# HTTP client for MVSep API
 requests>=2.31.0
-
-# Config and environment
 python-dotenv>=1.0.0
-
-# Audio mixing
 pydub>=0.25.1
