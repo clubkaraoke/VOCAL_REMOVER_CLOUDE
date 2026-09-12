@@ -32,7 +32,7 @@ if not MVSEP_API_TOKEN:
 
 # Import MVSep client
 sys.path.insert(0, str(Path(__file__).parent))
-from mvsep_client import get_separation_history, format_job_for_db
+from mvsep_client import get_separation_history, get_separation_status, format_job_for_db
 from database import (
     init_db, create_track, create_stem, get_all_tracks,
     get_track_with_stems, save_silent_regions, get_silent_regions
@@ -109,9 +109,9 @@ async def sync_mvsep_history():
     print("🔄 Sincronizando con MVSep...")
     
     try:
-        history = get_separation_history()
+        history_list = get_separation_history()
         
-        if not history:
+        if not history_list:
             return {
                 "status": "error",
                 "message": "No se pudo obtener histórico de MVSep",
@@ -121,14 +121,26 @@ async def sync_mvsep_history():
         synced = 0
         errors = 0
         
-        for job in history:
+        # Si history_list contiene diccionarios completos, usarlos directamente
+        # Si contiene strings (hashes), obtener detalles de cada uno
+        for item in history_list:
             try:
-                if job.get('status') != 'done':
-                    continue
+                # Determinar si es un diccionario o string
+                if isinstance(item, str):
+                    # Es un hash, obtener detalles completos
+                    print(f"  📡 Obteniendo detalles de {item[:30]}...")
+                    job = get_separation_status(item)
+                    if not job or job.get('status') != 'done':
+                        continue
+                else:
+                    # Ya es un diccionario con detalles
+                    job = item
+                    if job.get('status') != 'done':
+                        continue
                 
                 # Formatear para DB
                 formatted_job = format_job_for_db(job)
-                if not formatted_job:
+                if not formatted_job or not formatted_job.get('stems'):
                     continue
                 
                 # Evitar duplicados
@@ -166,7 +178,7 @@ async def sync_mvsep_history():
         
         return {
             "status": "synced",
-            "total_found": len(history),
+            "total_found": len(history_list),
             "new_projects": synced,
             "errors": errors,
             "message": f"{synced} nuevos proyectos sincronizados desde MVSep"
